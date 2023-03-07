@@ -44,7 +44,10 @@ class MainActivity : AppCompatActivity() {
 
     }
 
-
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        server.stop()
+    }
 
     fun showRadioButtonDialog(context: Context, imageView: ImageView){
         val options = arrayOf(Pair("CENTER",ImageView.ScaleType.CENTER) , Pair("MATRIX",ImageView.ScaleType.MATRIX), Pair("FIT_XY",ImageView.ScaleType.FIT_XY), Pair("FIT_START",ImageView.ScaleType.FIT_START), Pair("FIT_CENTER",ImageView.ScaleType.FIT_CENTER), Pair("FIT_END",ImageView.ScaleType.FIT_END), Pair("CENTER_CROP",ImageView.ScaleType.CENTER_CROP), Pair("CENTER_INSIDE",ImageView.ScaleType.CENTER_INSIDE) )
