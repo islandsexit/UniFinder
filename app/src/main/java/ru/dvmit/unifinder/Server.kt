@@ -2,22 +2,25 @@ package ru.dvmit.unifinder
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.opengl.Visibility
 import android.os.Handler
 import android.os.Looper
 import android.text.format.DateFormat
 import android.util.Base64
 import android.util.Log
+import android.view.View
+import android.view.View.GONE
 import android.widget.ImageView
+import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
-import java.net.ServerSocket
-import java.net.Socket
-import java.net.URL
-import java.net.URLDecoder
+import java.net.*
 import java.util.*
+import kotlin.collections.LinkedHashMap
 
 class Server(private val port: Int, imageView: ImageView) {
 
@@ -56,12 +59,12 @@ companion object{
                 if(keys.containsKey("img64")){
 
                     Log.i(TAG, "start: body - $body")
-                    try{
+                    try {
                         val bitmap = decodeBase64ToBitmap(keys.get("img64")!!)
-                        val response = JSONObject(mapOf("msg" to "success"))
                         val output = OutputStreamWriter(clientSocket.getOutputStream(), "UTF-8")
                         val dateTimeStart = DateFormat.format("yyyy-MM-dd%hh:mm:ss", Date())
-                        Handler(Looper.getMainLooper()).post{
+                        Handler(Looper.getMainLooper()).post {
+                            imageView.visibility = View.VISIBLE
                             imageView.setImageBitmap(bitmap)
                         }
                         Thread.sleep(1000)
@@ -69,16 +72,18 @@ companion object{
 
                         val params = mapOf(
                             "pass" to "123451",
-                            "personId" to "-1",
-                            "startTime" to "0",
-                            "endTime" to "0"
 
 
                             )
-                        makeRequestInUni("http://192.168.48.87:8090/newFindRecords",params)
-//                        makeRequestInUni("http://192.168.48.38:6969/find", params)
-                        sendResponse(output, response.toString())
+                        val name = makeRequestInUni("http://192.168.48.87", params)
+                        val response = JSONObject(mapOf("msg" to "SUCCESS", "personId" to name))
 
+                        sendResponse(output, response.toString())
+                        Handler(Looper.getMainLooper()).post {
+                            imageView.visibility = View.INVISIBLE
+                        }
+                    }catch(e:JSONException){
+                        writeError("There isn`t any faces", clientSocket)
                     }catch (e:Exception){
                         e.printStackTrace()
                         Log.e(TAG, "start: ${e}", )
@@ -90,7 +95,6 @@ companion object{
             }else{
                 writeError("Only Post Supported", clientSocket)
             }
-            clientSocket.close()
         }
     }
 
@@ -168,57 +172,88 @@ companion object{
         output.flush()
     }
 
-    fun makeRequestInUni(urlString:String, params: Map<String, String>){
-        val url = URL(urlString)
-        var socket = Socket(url.host, url.port)
-        var outputStream = socket.getOutputStream()
-        val query = params.map { "${it.key}=${it.value}" }.joinToString("&")
-        val httpRequest = "GET ${url.path}?$query HTTP/1.1\r\n" +
-                "Host: ${url.host}\r\n"+"\r\n"
+    fun makeRequestInUni(urlString:String, params: Map<String, String>):String{
+        val param = params + mapOf("personId" to "-1","startTime" to "0","endTime" to "0")
+        val response = ("$urlString:8090/newFindRecords").getRequest(param)
+         val findMap = parseJson(response)
+        val headers = mapOf("Content-Type" to "application/x-www-form-urlencoded")
+        val data = mapOf("personId" to "-1", "pass" to "123451", "startTime" to "0", "endTime" to "0")
+        val responsePost = "$urlString:8090/newDeleteRecords".postRequest(headers, data)
 
-        outputStream.write(httpRequest.toByteArray(Charsets.UTF_8))
-        outputStream.flush()
 
-        val inputStream = socket.getInputStream()
-        val buffer = BufferedReader(InputStreamReader(inputStream))
-        val response = buffer.readText()
-        parseOutputUniUbi(response)
-        buffer.close()
+            val dataJson = findMap["data"] as LinkedHashMap<*, *>
+            val records = dataJson["records"] as JSONArray
+            val lastPerson = records[0] as JSONObject
+            val lastName = lastPerson["personId"] as String
+        return lastName
 
-        socket = Socket(url.host, url.port)
-        outputStream = socket.getOutputStream()
-        val httpRequestToDelete = "POST /newDeleteRecords HTTP/1.1\r\n" +
-                "Host: ${url.host}\r\n"+"Content-Type: application/x-www-form-urlencoded" +"\r\n"+
-                "Content-Length: ${query.length}\r\n\r\n" +
-                query
-        outputStream.write(httpRequestToDelete.toByteArray(Charsets.UTF_8))
-        outputStream.flush()
 
-        val inputStream2 = socket.getInputStream()
-        val buffer2 = BufferedReader(InputStreamReader(inputStream2))
-        val response2 = buffer2.readText()
-        parseOutputUniUbi(response2)
-        buffer.close()
 
-        socket.close()
     }
 
-    private fun parseOutputUniUbi(response:String) {
-        val parts = response.split("\r\n\r\n")
-        val jsonObject = JSONObject(parts[1])
+    private fun String.getRequest(
+        query: Map<String, String>
+    ): String {
+        val query = query.map { "${it.key}=${URLEncoder.encode(it.value, "UTF-8")}" }.joinToString("&")
+        val url = URL("$this?$query")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 10000
+        connection.readTimeout = 10000
+        val input = BufferedReader(InputStreamReader(connection.inputStream))
+        val response = input.readText()
+        input.close()
+        connection.disconnect()
+        return response
+    }
+
+    private fun String.postRequest(
+        headers: Map<String, String>,
+        data: Map<String, String>
+    ):String{
+        val url = URL(this)
+        val body = data.map { "${it.key}=${URLEncoder.encode(it.value, "UTF-8")}" }.joinToString("&")
+        val connection = url.openConnection() as HttpURLConnection
+        headers.forEach{
+            connection.setRequestProperty(it.key, it.value)
+        }
+        connection.setRequestProperty("Content-Length",body.toByteArray(Charsets.UTF_8).size.toString())
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.connectTimeout = 10000
+        connection.readTimeout = 10000
+
+        val outputStream = connection.outputStream
+        outputStream.write(body.toByteArray(Charsets.UTF_8))
+        outputStream.flush()
+        outputStream.close()
+        val inputStream = connection.inputStream
+        val bufferedReader = BufferedReader(InputStreamReader(inputStream))
+        val response = bufferedReader.readText()
+        bufferedReader.close()
+        connection.disconnect()
+        return response
+
+    }
+
+    private fun parseJson(response:String):Map<String,Any> {
+        val json = JSONObject(response)
         val map = mutableMapOf<String, Any>()
-        val keys = jsonObject.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            val value = jsonObject.get(key)
-            map[key] = value
+        json.keys().forEach { key ->
+            val value = json.get(key)
+            if (value is JSONObject) {
+                map[key] = parseJson(value.toString())
+            } else {
+                map[key] = value
+            }
         }
         Log.i(TAG, "parseOutputUniUbi: ${map.toString()}")
+        return map
     }
 
 
     private fun writeError(msg:String, clientSocket:Socket){
-        val errorResponse = JSONObject(mapOf("msg" to msg))
+        val errorResponse = JSONObject(mapOf("Msg" to msg))
         val output = OutputStreamWriter(clientSocket.getOutputStream(), "UTF-8")
         sendResponse(output, errorResponse.toString())
     }
